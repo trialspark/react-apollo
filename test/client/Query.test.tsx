@@ -1496,4 +1496,113 @@ describe('Query component', () => {
       </AllPeopleQuery>
     );
   });
+
+  describe('re-rendering in the middle of fetching the same item', () => {
+    it('does not pass down partial data', done => {
+      const queryA = gql`
+        query personA {
+          person(id: "abc") {
+            id
+            firstName
+            lastName
+          }
+        }
+      `;
+      const queryB = gql`
+        query personB {
+          person(id: "abc") {
+            id
+            lastName
+            age
+          }
+        }
+      `;
+      const link = mockSingleLink(
+        {
+          request: { query: queryA },
+          result: {
+            data: {
+              person: { __typename: 'Person', id: 'abc', firstName: 'Jane', lastName: 'Doe' },
+            },
+          },
+        },
+        {
+          request: { query: queryB },
+          result: {
+            data: { person: { __typename: 'Person', id: 'abc', lastName: 'Doe', age: 50 } },
+          },
+        },
+      );
+      const client = new ApolloClient({
+        link,
+        cache: new Cache({}),
+      });
+      class Route extends React.Component<{ component: React.ComponentClass<any> }> {
+        state = {
+          pathname: '/',
+        };
+
+        render() {
+          const RouteComponent = this.props.component;
+
+          return <RouteComponent pathname={this.state.pathname} push={this._push} />;
+        }
+
+        private _push = (pathname: string) => {
+          this.setState({ pathname });
+        };
+      }
+      let assertA = false;
+      let assertB = false;
+      class Component extends React.Component<{
+        pathname: string;
+        push: (pathname: string) => void;
+      }> {
+        componentDidMount() {
+          this.props.push('/people/abc');
+        }
+
+        render() {
+          return (
+            <Query query={queryA}>
+              {({ data }) => {
+                if (data.person && !assertA) {
+                  assertA = true;
+                  expect(data).toEqual({
+                    person: { __typename: 'Person', id: 'abc', firstName: 'Jane', lastName: 'Doe' },
+                  });
+                }
+
+                return (
+                  <div>
+                    {this.props.pathname === '/people/abc' && (
+                      <Query query={queryB}>
+                        {({ data: nestedData }) => {
+                          if (nestedData.person && !assertB) {
+                            assertB = true;
+                            expect(nestedData).toEqual({
+                              person: { __typename: 'Person', id: 'abc', lastName: 'Doe', age: 50 },
+                            });
+                            done();
+                          }
+                          return null;
+                        }}
+                      </Query>
+                    )}
+                  </div>
+                );
+              }}
+            </Query>
+          );
+        }
+      }
+
+      expect.assertions(2);
+      wrapper = mount(
+        <ApolloProvider client={client}>
+          <Route component={Component} />
+        </ApolloProvider>,
+      );
+    });
+  });
 });
